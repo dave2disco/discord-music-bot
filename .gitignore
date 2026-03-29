@@ -1,0 +1,17 @@
+# Dipendenze
+node_modules/
+
+# Variabili d'ambiente — NON caricare mai su GitHub
+.env
+
+# Binari Windows (se li tieni nella cartella del progetto)
+yt-dlp.exe
+ffmpeg.exe
+
+# Log
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
