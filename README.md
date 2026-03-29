@@ -8,7 +8,7 @@ Bot musicale per Discord che riproduce audio da YouTube e YouTube Music usando `
 - Coda multi-traccia per server
 - Streaming in formato OggOpus (bassa latenza, no gracchiamento)
 - Cache delle ricerche per risposte più veloci
-- Comandi: `$play`, `$skip`, `$pause`, `$resume`, `$stop`, `$queue`
+- Comandi: `-play`, `-skip`, `-pause`, `-resume`, `-stop`, `-queue`
 
 ## Prerequisiti
 
@@ -68,13 +68,13 @@ src/
 
 | Comando | Descrizione |
 |---|---|
-| `$play [canzone o link]` | Riproduce o aggiunge alla coda |
-| `$skip` | Salta la traccia corrente |
-| `$pause` | Mette in pausa |
-| `$resume` | Riprende la riproduzione |
-| `$stop` | Ferma tutto e svuota la coda |
-| `$queue` | Mostra le tracce in coda |
-| `$help` | Lista dei comandi |
+| `-play [canzone o link]` | Riproduce o aggiunge alla coda |
+| `-skip` | Salta la traccia corrente |
+| `-pause` | Mette in pausa |
+| `-resume` | Riprende la riproduzione |
+| `-stop` | Ferma tutto e svuota la coda |
+| `-queue` | Mostra le tracce in coda |
+| `-help` | Lista dei comandi |
 
 ## Hosting su Android (Termux)
 
