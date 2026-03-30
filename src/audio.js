@@ -1,6 +1,5 @@
 const { spawn } = require('child_process');
 const { createAudioResource, StreamType, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
-const { EmbedBuilder } = require('discord.js');
 const { YTDLP_BIN, FFMPEG_BIN } = require('./config');
 const { queues } = require('./queue');
 
@@ -26,7 +25,6 @@ function createAudioStream(webUrl, title, guildId) {
 
   const ffmpeg = spawn(FFMPEG_BIN, [
     '-analyzeduration', '0',
-
     '-probesize', '32K',
     '-i', 'pipe:0',
     '-vn',
@@ -40,7 +38,12 @@ function createAudioStream(webUrl, title, guildId) {
     'pipe:1',
   ], {
     stdio: ['pipe', 'pipe', 'ignore'],
-    highWaterMark: 256 * 1024,
+    // FIX ISSUE-2: ridotto da 256KB a 64KB.
+    // A 96kbps, 256KB ≈ 21 secondi di audio pre-bufferizzati nel processo
+    // Node.js: troppo margine per dati residui durante la transizione tra
+    // canzoni. 64KB ≈ ~5 secondi: abbastanza per evitare stuttering, abbastanza
+    // poco per rendere il cambio canzone più pulito.
+    highWaterMark: 64 * 1024,
   });
 
   ytdlp.stdout.pipe(ffmpeg.stdin);
@@ -59,14 +62,14 @@ function createAudioStream(webUrl, title, guildId) {
     }
   });
 
-  ytdlp.on('error',  (err) => console.error(`[ytdlp]  ${title}:`, err.message));
+  ytdlp.on('error', (err) => console.error(`[ytdlp] ${title}:`, err.message));
   ffmpeg.on('error', (err) => console.error(`[ffmpeg] ${title}:`, err.message));
 
   ffmpeg.on('exit', (code, signal) => {
     if (signal === 'SIGKILL') {
       const queue = queues.get(guildId);
       if (queue) queue.oomKilled = true;
-      console.warn(`⚠  OOM killer su "${title}" — termino yt-dlp`);
+      console.warn(`⚠ OOM killer su "${title}" — termino yt-dlp`);
       try { ytdlp.kill('SIGTERM'); } catch (_) {}
       try { ffmpeg.stdout.destroy(); } catch (_) {}
     }
@@ -81,7 +84,7 @@ async function playNext(guildId, channel) {
   if (!queue || queue.songs.length === 0) {
     if (queue?.connection) {
       queue.startInactivityTimer(() => {
-        console.log(`⏾  Disconnessione per inattività (5 min) — guild ${guildId}`);
+        console.log(`⏾ Disconnessione per inattività (5 min) — guild ${guildId}`);
         try { queue.connection.destroy(); } catch (_) {}
         queues.delete(guildId);
         channel.send('👋 Disconnesso per inattività.').catch(() => {});
@@ -95,7 +98,7 @@ async function playNext(guildId, channel) {
   queue.cancelInactivityTimer();
 
   if (queue.connection.state.status !== VoiceConnectionStatus.Ready) {
-    console.log(`⏳  Aspetto connessione vocale prima di riprodurre...`);
+    console.log(`⏳ Aspetto connessione vocale prima di riprodurre...`);
     try {
       await entersState(queue.connection, VoiceConnectionStatus.Ready, 15_000);
     } catch {
@@ -115,23 +118,36 @@ async function playNext(guildId, channel) {
     queue.startedAt = Date.now();
 
     const durStr = song.duration ? ` [${formatTime(song.duration)}]` : '';
-    console.log(`▶  "${song.title}" — ${song.platform}${durStr}`);
+    console.log(`▶ "${song.title}" — ${song.platform}${durStr}`);
 
     const resource = createAudioResource(stream, { inputType: StreamType.OggOpus });
     queue.player.play(resource);
 
-    const embed = new EmbedBuilder()
-      .setColor(0x1DB954)
-      .setTitle('🎵 In riproduzione')
-      .setDescription(`**${song.title}**`)
-      .setFooter({ text: `Richiesto da ${song.requestedBy} • ${song.platform}` });
+    // FIX ISSUE-1: l'embed "In riproduzione" è stato spostato nell'handler
+    // AudioPlayerStatus.Playing in commands.js. In questo modo il messaggio
+    // viene inviato solo quando l'audio sta effettivamente uscendo, non subito
+    // dopo player.play() (che può fallire silenziosamente in < 2 secondi).
 
-    await channel.send({ embeds: [embed] });
   } catch (err) {
-    console.error(`✗  Errore riproduzione "${song.title}": ${err.message}`);
-    await channel.send(`❌ Errore durante la riproduzione: ${err.message}`);
+    console.error(`✗ Errore riproduzione "${song.title}": ${err.message}`);
+    await channel.send(`❌ Errore durante la riproduzione: ${err.message}`).catch(() => {});
     queue.songs.shift();
     queue.playing = false;
+
+    // FIX BUG 3: senza questo controllo, se createAudioStream() o altre
+    // operazioni sincrone lanciano un'eccezione per ogni canzone (es. binario
+    // mancante), la ricorsione è infinita perché l'handler Idle non viene mai
+    // raggiunto e consecutiveFailures non viene mai incrementato.
+    queue.consecutiveFailures++;
+    if (queue.consecutiveFailures >= 3) {
+      queue.consecutiveFailures = 0;
+      channel.send(
+        `❌ **${queue.consecutiveFailures + 3} errori consecutivi**. Possibile problema con i binari o la connessione.\n` +
+        `Riproduzione interrotta. Usa \`-play\` per riprovare.`
+      ).catch(() => {});
+      return;
+    }
+
     playNext(guildId, channel);
   }
 }

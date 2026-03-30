@@ -13,10 +13,10 @@ const { playNext, formatTime } = require('./audio');
 
 function buildSong(info, requestedBy) {
   return {
-    title:       info.title,
-    webUrl:      info.webUrl,
-    platform:    info.platform || 'Link diretto',
-    duration:    info.duration || 0,
+    title: info.title,
+    webUrl: info.webUrl,
+    platform: info.platform || 'Link diretto',
+    duration: info.duration || 0,
     requestedBy,
   };
 }
@@ -29,16 +29,44 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
   queues.set(guildId, queue);
 
   const connection = joinVoiceChannel({
-    channelId:      voiceChannel.id,
+    channelId: voiceChannel.id,
     guildId,
     adapterCreator: message.guild.voiceAdapterCreator,
   });
   const player = createAudioPlayer();
   connection.subscribe(player);
   queue.connection = connection;
-  queue.player     = player;
+  queue.player = player;
 
   const channel = message.channel;
+
+  // FIX ISSUE-1 + BUG textChannel: salviamo il riferimento al canale testo
+  // nel queue, così l'handler Playing qui sotto può inviare l'embed.
+  queue.textChannel = channel;
+
+  // ─── FIX ISSUE-1: embed "In riproduzione" spostato qui ─────────────────────
+  // L'embed viene inviato solo quando il player entra effettivamente in stato
+  // Playing (audio che esce davvero). Prima era in audio.js subito dopo
+  // player.play(), e se la stream falliva silenziosamente entro ~2 secondi,
+  // l'embed veniva inviato anche per canzoni mai riprodotte.
+  //
+  // Filtro oldState: vogliamo l'embed solo per nuove canzoni (Buffering→Playing),
+  // NON per resume (Paused→Playing), che ha già il suo feedback in cmdResume.
+  player.on(AudioPlayerStatus.Playing, (oldState) => {
+    if (oldState.status !== AudioPlayerStatus.Buffering) return;
+
+    const q = queues.get(guildId);
+    if (!q || !q.songs[0]) return;
+
+    const song = q.songs[0];
+    const embed = new EmbedBuilder()
+      .setColor(0x1DB954)
+      .setTitle('🎵 In riproduzione')
+      .setDescription(`**${song.title}**`)
+      .setFooter({ text: `Richiesto da ${song.requestedBy} • ${song.platform}` });
+
+    channel.send({ embeds: [embed] }).catch(() => {});
+  });
 
   player.on(AudioPlayerStatus.Idle, (oldState) => {
 
@@ -50,11 +78,11 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
     const finished = q.songs[0];
     if (finished) {
       if (q.skipping) {
-        console.log(`⏭  "${finished.title}" — skippata`);
+        console.log(`⏭ "${finished.title}" — skippata`);
       } else if (q.oomKilled) {
-        console.log(`↻  Riprendo dopo OOM killer`);
+        console.log(`↻ Riprendo dopo OOM killer`);
       } else {
-        console.log(`✓  "${finished.title}" — completata`);
+        console.log(`✓ "${finished.title}" — completata`);
       }
     }
 
@@ -62,7 +90,7 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
       const playedMs = q.startedAt ? Date.now() - q.startedAt : 0;
       if (playedMs < 2000) {
         q.consecutiveFailures++;
-        console.warn(`⚠  Fallimento rapido #${q.consecutiveFailures} per "${finished?.title}" (durata: ${playedMs}ms)`);
+        console.warn(`⚠ Fallimento rapido #${q.consecutiveFailures} per "${finished?.title}" (durata: ${playedMs}ms)`);
         if (q.consecutiveFailures >= 3) {
           channel.send(
             `❌ **${q.consecutiveFailures} canzoni consecutive** non riuscite a riprodursi.\n` +
@@ -80,29 +108,44 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
       }
     }
 
-    q.skipping  = false;
+    q.skipping = false;
     q.oomKilled = false;
     q.killCurrentProcesses();
     q.songs.shift();
     q.playing = false;
-    playNext(guildId, channel);
+
+    // FIX ISSUE-2: gap di 150ms prima di avviare la canzone successiva.
+    // Senza questo delay, il nuovo AudioResource partiva immediatamente e
+    // Discord (che ha un suo jitter buffer lato client) poteva riprodurre
+    // ancora qualche frame residuo della canzone precedente prima di
+    // sincronizzarsi sul nuovo stream. 150ms è abbastanza per svuotare
+    // il jitter buffer senza che l'utente percepisca una pausa apprezzabile.
+    setTimeout(() => {
+      const q2 = queues.get(guildId);
+      if (!q2 || q2.playing) return; // guard: potrebbe già essere partita (-play nel frattempo)
+      playNext(guildId, channel);
+    }, 150);
   });
 
   player.on('error', async (error) => {
     const q = queues.get(guildId);
-    console.error(`✗  Errore player: ${error.message}`);
+    console.error(`✗ Errore player: ${error.message}`);
     await channel.send(`❌ Errore audio: ${error.message}`);
     if (q) {
       q.killCurrentProcesses();
       q.songs.shift();
       q.playing = false;
-      playNext(guildId, channel);
+      setTimeout(() => {
+        const q2 = queues.get(guildId);
+        if (!q2 || q2.playing) return;
+        playNext(guildId, channel);
+      }, 150);
     }
   });
 
   entersState(connection, VoiceConnectionStatus.Ready, 30_000)
     .then(() => {
-      console.log(`✔  Connessione vocale pronta — guild ${guildId}`);
+      console.log(`✔ Connessione vocale pronta — guild ${guildId}`);
 
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
         try {
@@ -120,7 +163,7 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
     })
     .catch(() => {
 
-      console.error(`✗  Connessione vocale mai raggiunta — guild ${guildId}`);
+      console.error(`✗ Connessione vocale mai raggiunta — guild ${guildId}`);
       const q = queues.get(guildId);
       if (q) q.killCurrentProcesses();
       try { connection.destroy(); } catch (_) {}
@@ -137,8 +180,8 @@ async function cmdPlay(message, args) {
   const voiceChannel = message.member.voice.channel;
   if (!voiceChannel) return message.reply('❌ Devi essere in un canale vocale.');
 
-  const query    = args.join(' ');
-  const guildId  = message.guild.id;
+  const query = args.join(' ');
+  const guildId = message.guild.id;
   const username = message.author.username;
 
   if (isYouTubePlaylistUrl(query)) {
@@ -151,7 +194,7 @@ async function cmdPlay(message, args) {
     }
     if (!tracks.length) return loading.edit('❌ Playlist vuota o non accessibile.');
 
-    const queue    = getOrCreateQueue(guildId, voiceChannel, message);
+    const queue = getOrCreateQueue(guildId, voiceChannel, message);
     const wasEmpty = queue.songs.length === 0 && !queue.playing;
 
     queue.playlistLoaderId++;
@@ -177,7 +220,7 @@ async function cmdPlay(message, args) {
     }
     if (!tracks.length) return loading.edit('❌ Playlist Spotify vuota o non accessibile.');
 
-    const queue    = getOrCreateQueue(guildId, voiceChannel, message);
+    const queue = getOrCreateQueue(guildId, voiceChannel, message);
     const wasEmpty = queue.songs.length === 0 && !queue.playing;
 
     queue.playlistLoaderId++;
@@ -195,7 +238,7 @@ async function cmdPlay(message, args) {
 
         const currentQueue = queues.get(guildId);
         if (!currentQueue || currentQueue.playlistLoaderId !== loaderId) {
-          console.log(`↩  Loader playlist Spotify annullato`);
+          console.log(`↩ Loader playlist Spotify annullato`);
           return;
         }
 
@@ -206,10 +249,10 @@ async function cmdPlay(message, args) {
           if (!q || q.playlistLoaderId !== loaderId) return;
 
           q.songs.push({
-            title:       result.title,
-            webUrl:      result.webUrl,
-            platform:    'Spotify → YouTube Music',
-            duration:    result.duration || 0,
+            title: result.title,
+            webUrl: result.webUrl,
+            platform: 'Spotify → YouTube Music',
+            duration: result.duration || 0,
             requestedBy: username,
           });
 
@@ -243,7 +286,7 @@ async function cmdPlay(message, args) {
     return searching.edit(`❌ ${err.message}`);
   }
 
-  const song  = buildSong(songInfo, username);
+  const song = buildSong(songInfo, username);
   const queue = getOrCreateQueue(guildId, voiceChannel, message);
 
   const wasEmpty = queue.songs.length === 0 && !queue.playing;
@@ -323,7 +366,7 @@ function cmdNowPlaying(message) {
     return message.reply('❌ Nessuna canzone in riproduzione.');
   }
 
-  const song    = queue.songs[0];
+  const song = queue.songs[0];
   const elapsed = queue.startedAt
     ? Math.floor((Date.now() - queue.startedAt) / 1000)
     : 0;
@@ -332,10 +375,10 @@ function cmdNowPlaying(message) {
   let desc = `**${song.title}**`;
   if (duration > 0) {
     const filled = Math.min(20, Math.round((elapsed / duration) * 20));
-    const bar    = '▓'.repeat(filled) + '░'.repeat(20 - filled);
+    const bar = '▓'.repeat(filled) + '░'.repeat(20 - filled);
     desc += `\n\`${bar}\` ${formatTime(elapsed)} / ${formatTime(duration)}`;
   }
-  if (queue.paused) desc += '  ⏸️';
+  if (queue.paused) desc += ' ⏸️';
 
   const embed = new EmbedBuilder()
     .setColor(0x1DB954)
@@ -353,7 +396,7 @@ function cmdShuffle(message) {
   }
 
   const current = queue.songs[0];
-  const rest    = queue.songs.slice(1);
+  const rest = queue.songs.slice(1);
   for (let i = rest.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [rest[i], rest[j]] = [rest[j], rest[i]];
@@ -366,16 +409,16 @@ function cmdHelp(message) {
   message.reply([
     '🎵 **Comandi disponibili:**',
     '`-play [canzone o link]` — Riproduce o aggiunge alla coda',
-    '                          Accetta: testo, link YouTube, link Spotify,',
-    '                          playlist YouTube, playlist Spotify',
-    '`-skip`                  — Salta la canzone corrente',
-    '`-pause`                 — Mette in pausa',
-    '`-resume`                — Riprende la riproduzione',
-    '`-stop`                  — Ferma tutto e svuota la coda',
-    '`-queue`                 — Mostra la coda con le durate',
-    '`-nowplaying`            — Canzone corrente con barra di avanzamento',
-    '`-shuffle`               — Mescola le canzoni in coda',
-    '`-help`                  — Mostra questo messaggio',
+    ' Accetta: testo, link YouTube, link Spotify,',
+    ' playlist YouTube, playlist Spotify',
+    '`-skip` — Salta la canzone corrente',
+    '`-pause` — Mette in pausa',
+    '`-resume` — Riprende la riproduzione',
+    '`-stop` — Ferma tutto e svuota la coda',
+    '`-queue` — Mostra la coda con le durate',
+    '`-nowplaying` — Canzone corrente con barra di avanzamento',
+    '`-shuffle` — Mescola le canzoni in coda',
+    '`-help` — Mostra questo messaggio',
   ].join('\n'));
 }
 
