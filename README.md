@@ -1,74 +1,118 @@
 # 🎵 Music Bot Discord
 
-Bot musicale per Discord che riproduce audio da YouTube e YouTube Music usando `yt-dlp` e `ffmpeg`.
+Bot musicale per Discord che riproduce audio da YouTube, YouTube Music e Spotify
+usando `yt-dlp` e `ffmpeg`.
 
 ## Funzionalità
 
-- Ricerca per nome o link diretto
+- Ricerca per nome o link diretto (YouTube, YouTube Music, Spotify)
 - Coda multi-traccia per server
 - Streaming in formato OggOpus (bassa latenza, no gracchiamento)
 - Cache delle ricerche per risposte più veloci
-- Comandi: `-play`, `-skip`, `-pause`, `-resume`, `-stop`, `-queue`
+- Ottimizzato per hosting su dispositivi ARM a bassa RAM (es. Android + Termux)
+- Comandi: `-play`, `-skip`, `-pause`, `-resume`, `-stop`, `-queue`, `-help`
 
 ## Prerequisiti
 
 - **Node.js** 18+
 - **ffmpeg** con supporto `libopus`
 - **yt-dlp**
+- **Account Spotify Developer** (gratuito) per il supporto Spotify
 
-### Installazione su Linux / Termux (Android)
+## Installazione
 
+### Linux
 ```bash
-# Linux
 sudo apt install ffmpeg
-pip install yt-dlp
-
-# Termux (Android)
-pkg install nodejs ffmpeg python
 pip install yt-dlp
 ```
 
-### Installazione su Windows
+### Termux (Android)
+```bash
+pkg install nodejs ffmpeg python cronie
+pip install yt-dlp
+```
 
-Scarica `yt-dlp.exe` e `ffmpeg.exe` e mettili nella cartella radice del progetto (accanto a `index.js`).
+### Windows
+
+Scarica `yt-dlp.exe` e `ffmpeg.exe` e mettili nella cartella radice del progetto
+(accanto a `index.js`).
 
 ## Setup
-
 ```bash
 # 1. Clona il repo
-git clone https://github.com/tuoutente/music-bot.git
-cd music-bot
+git clone https://github.com/dave2disco/discord-music-bot.git
+cd discord-music-bot
 
 # 2. Installa le dipendenze Node
 npm install
 
-# 3. Crea il file .env con il tuo token
+# 3. Crea il file .env
 cp .env.example .env
-# Modifica .env e inserisci DISCORD_TOKEN=...
+```
 
-# 4. Avvia il bot
+Modifica `.env` con i tuoi valori:
+```
+DISCORD_TOKEN=il_tuo_token_discord
+
+SPOTIFY_CLIENT_ID=il_tuo_client_id
+SPOTIFY_CLIENT_SECRET=il_tuo_client_secret
+```
+
+Il token Discord si ottiene dal [Discord Developer Portal](https://discord.com/developers/applications).
+Le credenziali Spotify si ottengono dal [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+creando una nuova app (piano gratuito, no Premium richiesto).
+
+## Avvio
+
+### Sviluppo
+```bash
 npm start
 ```
 
-Il token del bot si ottiene dal [Discord Developer Portal](https://discord.com/developers/applications).
+### Produzione con pm2 (consigliato)
+```bash
+npm install -g pm2
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup   # facoltativo: avvio automatico al reboot
+```
+
+`ecosystem.config.js` configura pm2 per riavviare automaticamente il bot
+se supera 220 MB di RAM, prevenendo crash da OOM killer su sistemi con
+poca memoria disponibile.
+
+## Hosting su Android (Termux)
+
+Il bot è ottimizzato per girare stabilmente su Android tramite Termux con pm2.
+
+### Comandi pm2 utili
+```bash
+pm2 logs bot          # log in tempo reale
+pm2 logs bot --lines 100  # ultimi 100 log
+pm2 status            # stato del processo
+pm2 reload bot        # ricarica senza downtime
+pm2 restart bot       # riavvio completo
+```
 
 ## Struttura del progetto
-
 ```
-index.js          # Entry point: client Discord e router dei comandi
+index.js              # Entry point: client Discord e router dei comandi
+ecosystem.config.js   # Configurazione pm2 (memory limit, restart policy)
 src/
-  config.js       # Percorsi binari e variabili d'ambiente
-  queue.js        # Classe ServerQueue e Map delle code per server
-  search.js       # Ricerca con yt-dlp e cache LRU
-  audio.js        # Pipeline di streaming yt-dlp → ffmpeg → OggOpus
-  commands.js     # Implementazione dei comandi ($play, $skip, ecc.)
+  config.js           # Percorsi binari e variabili d'ambiente
+  queue.js            # Classe ServerQueue e Map delle code per server
+  search.js           # Ricerca con yt-dlp, cache LRU, supporto Spotify
+  spotify.js          # Integrazione Spotify Web API (metadati traccia)
+  audio.js            # Pipeline di streaming yt-dlp → ffmpeg → OggOpus
+  commands.js         # Implementazione dei comandi
 ```
 
 ## Comandi
 
 | Comando | Descrizione |
 |---|---|
-| `-play [canzone o link]` | Riproduce o aggiunge alla coda |
+| `-play [canzone o link]` | Riproduce o aggiunge alla coda. Accetta testo, link YouTube e link Spotify |
 | `-skip` | Salta la traccia corrente |
 | `-pause` | Mette in pausa |
 | `-resume` | Riprende la riproduzione |
@@ -76,13 +120,22 @@ src/
 | `-queue` | Mostra le tracce in coda |
 | `-help` | Lista dei comandi |
 
-## Hosting su Android (Termux)
+## Note tecniche
 
-```bash
-pkg install tmux
-tmux new -s bot
-npm start
-# CTRL+B poi D per staccarti senza fermare il processo
+### Pipeline audio
+```
+yt-dlp → pipe → ffmpeg → OggOpus → @discordjs/voice → Discord
 ```
 
-Disabilita l'ottimizzazione batteria per Termux nelle impostazioni Android per evitare che il processo venga terminato quando lo schermo si spegne.
+### Supporto Spotify
+
+Usa la Spotify Web API esclusivamente per leggere titolo e artista di una traccia.
+L'audio viene sempre cercato su YouTube Music/YouTube tramite yt-dlp.
+Non è richiesto Spotify Premium. Il token OAuth (flusso Client Credentials)
+viene cachato e rinnovato automaticamente ogni 60 minuti.
+
+### Cache ricerche
+
+La cache LRU mantiene in memoria le ultime **50 ricerche** (in precedenza 200).
+Tutte le chiamate a yt-dlp usano `--no-cache-dir` per evitare l'accumulo di
+file temporanei su disco nel corso delle sessioni lunghe.
