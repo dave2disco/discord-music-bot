@@ -30,6 +30,7 @@ function httpsPost(hostname, path, body, headers) {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
+        console.log('[Spotify token raw]', data); // ← riga temporanea
         try { resolve(JSON.parse(data)); }
         catch (e) { reject(new Error('Risposta token Spotify non valida')); }
       });
