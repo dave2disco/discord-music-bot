@@ -18,7 +18,7 @@ class ServerQueue {
     this.inactivityTimer  = null;   
 
     this.currentProcesses = [];
-    this.playlistLoaderId = 0;      
+    this.consecutiveFailures = 0; // quante canzoni consecutive sono fallite in < 2s
 
   }
 

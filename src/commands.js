@@ -60,6 +60,33 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
       }
     }
 
+    // ── Guard anti-loop: ferma se troppe canzoni falliscono in rapida successione ──
+    // Se una canzone dura meno di 2 secondi (e non è stata skippata intenzionalmente)
+    // è quasi certamente un fallimento silenzioso (connessione non pronta, yt-dlp error, ecc.).
+    // Dopo 3 fallimenti consecutivi fermiamo tutto per evitare lo spam di embed.
+    if (!q.skipping && !q.oomKilled) {
+      const playedMs = q.startedAt ? Date.now() - q.startedAt : 0;
+      if (playedMs < 2000) {
+        q.consecutiveFailures++;
+        console.warn(`⚠  Fallimento rapido #${q.consecutiveFailures} per "${finished?.title}" (durata: ${playedMs}ms)`);
+        if (q.consecutiveFailures >= 3) {
+          channel.send(
+            `❌ **${q.consecutiveFailures} canzoni consecutive** non riuscite a riprodursi.\n` +
+            `Possibile problema di connessione o con i link. Riproduzione interrotta.\n` +
+            `Usa \`-play\` per riprovare o \`-skip\` per saltare.`
+          ).catch(() => {});
+          q.killCurrentProcesses();
+          q.songs = [];
+          q.playing = false;
+          q.consecutiveFailures = 0;
+          return;
+        }
+      } else {
+        q.consecutiveFailures = 0;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     q.skipping  = false;
     q.oomKilled = false;
     q.killCurrentProcesses();

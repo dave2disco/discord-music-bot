@@ -1,5 +1,5 @@
 const { spawn } = require('child_process');
-const { createAudioResource, StreamType } = require('@discordjs/voice');
+const { createAudioResource, StreamType, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const { EmbedBuilder } = require('discord.js');
 const { YTDLP_BIN, FFMPEG_BIN } = require('./config');
 const { queues } = require('./queue');
@@ -95,6 +95,23 @@ async function playNext(guildId, channel) {
   if (queue.playing) return;
 
   queue.cancelInactivityTimer();
+
+  // ── Attendi che la connessione WebRTC sia pronta ──────────────────────────
+  // joinVoiceChannel() è asincrono internamente: se playNext viene chiamato
+  // subito dopo (es. playlist caricata all'istante), la connessione non è
+  // ancora stabilita. Il player "suona" ma i pacchetti vengono scartati,
+  // lo stream si chiude in < 1s → Idle → canzone successiva → loop infinito.
+  if (queue.connection.state.status !== VoiceConnectionStatus.Ready) {
+    console.log(`⏳  Aspetto connessione vocale prima di riprodurre...`);
+    try {
+      await entersState(queue.connection, VoiceConnectionStatus.Ready, 15_000);
+    } catch {
+      await channel.send('❌ Impossibile stabilire la connessione vocale. Riprova il comando.').catch(() => {});
+      queues.delete(guildId);
+      return;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const song = queue.songs[0];
   queue.playing = true;
