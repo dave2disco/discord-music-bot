@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const { createAudioResource, StreamType, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const { YTDLP_BIN, FFMPEG_BIN } = require('./config');
 const { queues } = require('./queue');
+const { normalizeYouTubeUrl } = require('./search');
 
 function formatTime(seconds) {
   if (!seconds || seconds <= 0) return '?:??';
@@ -13,10 +14,9 @@ function formatTime(seconds) {
 // ─── Silence buffer ──────────────────────────────────────────────────────────
 // Genera `durationMs` ms di silenzio OggOpus usando ffmpeg + anullsrc.
 // Scopo: svuotare il jitter buffer lato client di Discord tra una canzone e
-// l'altra. Il jitter buffer può contenere fino a ~500-1000 ms di audio residuo
-// della canzone precedente; riproducendo questo silenzio lo spingiamo fuori
-// prima che parta la canzone successiva, eliminando il "millisecondo di canzone
-// vecchia" che si sentiva all'inizio di ogni nuova traccia.
+// l'altra (e dopo uno skip). Il jitter buffer può contenere fino a ~500-1000ms
+// di audio residuo; riproducendo questo silenzio lo spingiamo fuori prima che
+// parta la canzone successiva.
 function createSilenceResource(durationMs = 500) {
   const proc = spawn(FFMPEG_BIN, [
     '-f', 'lavfi',
@@ -46,13 +46,20 @@ function createSilenceResource(durationMs = 500) {
 }
 
 function createAudioStream(webUrl, title, guildId) {
+  // Normalizziamo l'URL anche qui, come secondo livello di difesa.
+  // I webUrl che arrivano dalla playlist sono già stati normalizzati in
+  // fetchYouTubePlaylist, ma quelli che arrivano da -play diretto o da
+  // ricerche testualI passano già per search() che normalizza. Questo
+  // garantisce comunque che nessun ?si= o youtu.be raggiunga yt-dlp.
+  const cleanUrl = normalizeYouTubeUrl(webUrl);
+
   const ytdlp = spawn(YTDLP_BIN, [
     '--no-playlist',
     '--no-cache-dir',
     '-f', 'bestaudio[abr<=96]/bestaudio[abr<=160]/bestaudio',
     '--no-warnings',
     '-o', '-',
-    webUrl,
+    cleanUrl,
   ], {
     stdio: ['ignore', 'pipe', 'ignore'],
     highWaterMark: 512 * 1024,

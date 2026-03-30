@@ -5,9 +5,6 @@ const { isSpotifyUrl, getSpotifyTrackQuery } = require('./spotify');
 
 const execAsync = promisify(exec);
 
-// Su Linux/Termux abbassa la priorità CPU dei processi di ricerca
-// così ffmpeg (audio streaming) non viene privato di CPU durante il caricamento playlist.
-// Su Windows nice non esiste, quindi non viene usato.
 const NICE = process.platform === 'win32' ? '' : 'nice -n 10 ';
 
 const searchCache = new Map();
@@ -30,6 +27,42 @@ function isYouTubePlaylistUrl(str) {
   } catch { return false; }
 }
 
+// ─── Normalizzazione URL YouTube ─────────────────────────────────────────────
+// Converte qualsiasi variante di link YouTube in un URL canonico pulito.
+//
+// Problemi risolti:
+//   • youtu.be/ID?si=...  → youtube.com/watch?v=ID
+//     Il parametro ?si= è un token di tracking condivisione. Alcune versioni
+//     di yt-dlp (specie su Termux/Android) non gestiscono correttamente il
+//     redirect che genera, facendo fallire silenziosamente l'estrazione.
+//   • youtube.com/watch?v=ID&pp=...&feature=...
+//     Parametri di tracking aggiuntivi che possono causare comportamenti
+//     inattesi con certi estrattori.
+//
+// Vengono preservati solo i parametri semanticamente rilevanti: `v` (video id).
+// `list` viene intenzionalmente scartato perché a questo punto siamo già
+// in fase di riproduzione di una singola traccia (le playlist sono già state
+// espanse in fetchYouTubePlaylist).
+function normalizeYouTubeUrl(url) {
+  try {
+    const u = new URL(url);
+
+    // youtu.be/VIDEO_ID[?qualsiasi_cosa]
+    if (u.hostname === 'youtu.be') {
+      const videoId = u.pathname.slice(1); // rimuove lo '/' iniziale
+      if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+    }
+
+    // youtube.com/watch?v=VIDEO_ID[&si=...&pp=...&feature=...]
+    if (u.hostname.includes('youtube.com') && u.pathname === '/watch') {
+      const v = u.searchParams.get('v');
+      if (v) return `https://www.youtube.com/watch?v=${v}`;
+    }
+  } catch (_) {}
+
+  return url; // URL non YouTube: restituisce invariato
+}
+
 async function fetchYouTubePlaylist(url) {
   const cmd = `${NICE}"${YTDLP_BIN}" --flat-playlist --no-cache-dir --ignore-errors --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${url}"`;
   const { stdout } = await execAsync(cmd, { ...EXEC_OPTIONS, timeout: 120000 });
@@ -40,7 +73,9 @@ async function fetchYouTubePlaylist(url) {
     if (title && webUrl && webUrl.startsWith('http')) {
       tracks.push({
         title,
-        webUrl,
+        // Normalizziamo subito: i webUrl delle playlist possono contenere
+        // parametri ?si= o altri token spuri che causano problemi in streaming.
+        webUrl: normalizeYouTubeUrl(webUrl),
         platform: 'YouTube',
         duration: parseInt(durationStr) || 0,
       });
@@ -59,13 +94,16 @@ async function search(query) {
   let songInfo;
 
   if (isUrl(query)) {
+    // Normalizziamo prima di passare a yt-dlp: rimuove ?si=, ?pp=, converte
+    // youtu.be → youtube.com/watch?v= ecc.
+    const cleanUrl = normalizeYouTubeUrl(query);
     try {
-      const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(duration)s" "${query}"`;
+      const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(duration)s" "${cleanUrl}"`;
       const { stdout } = await execAsync(cmd, EXEC_OPTIONS);
       const [title, durationStr] = stdout.trim().split('\n')[0].split('|||');
       songInfo = {
-        title:    title || query,
-        webUrl:   query,
+        title: title || cleanUrl,
+        webUrl: cleanUrl,
         platform: 'Link diretto',
         duration: parseInt(durationStr) || 0,
       };
@@ -107,4 +145,4 @@ async function search(query) {
   return songInfo;
 }
 
-module.exports = { search, isYouTubePlaylistUrl, fetchYouTubePlaylist };
+module.exports = { search, isYouTubePlaylistUrl, fetchYouTubePlaylist, normalizeYouTubeUrl };
