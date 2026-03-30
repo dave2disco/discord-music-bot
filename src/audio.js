@@ -4,9 +4,16 @@
 // Scelte tecniche:
 //   - Output OggOpus invece di PCM grezzo: riduce il throughput di ~85×,
 //     eliminando la causa principale di buffer underrun e gracchiamento.
-//   - highWaterMark 512 KB: riduce i micro-stall durante picchi di latenza di rete.
-//   - Formato yt-dlp flessibile: preferisce audio ≤160 kbps, fallback su bestaudio.
-//   - -reconnect NON usato: funziona solo con input HTTP diretti, non con pipe:0.
+//   - highWaterMark ridotto a 128 KB (yt-dlp) / 64 KB (ffmpeg): l'output
+//     Opus è già compresso, buffer grandi non danno vantaggi e consumano RAM.
+//   - -analyzeduration 0 / -probesize 32: impedisce a ffmpeg di caricare
+//     in memoria metadati dell'intero file prima di iniziare lo stream.
+//   - -bufsize 64k: limite esplicito del buffer di output di ffmpeg.
+//   - --no-cache-dir: yt-dlp non accumula cache su disco nel tempo.
+//   - Gestione SIGKILL: quando Android OOM-killa ffmpeg, yt-dlp viene
+//     terminato esplicitamente per evitare che continui a bufferizzare.
+//   - EPIPE su ffmpeg.stdin è atteso e silenziato: accade ogni volta che
+//     ffmpeg muore prima che yt-dlp finisca di inviare dati.
 
 const { spawn } = require('child_process');
 const { createAudioResource, StreamType } = require('@discordjs/voice');
@@ -17,42 +24,72 @@ const { queues } = require('./queue');
 function createAudioStream(webUrl, title) {
   const ytdlp = spawn(YTDLP_BIN, [
     '--no-playlist',
-    '-f', 'bestaudio[abr<=160]/bestaudio',
+    '--no-cache-dir',                              // ← non accumula cache su disco nel tempo
+    '-f', 'bestaudio[abr<=96]/bestaudio[abr<=160]/bestaudio', // ← preferisce bitrate basso
     '--no-warnings',
     '-o', '-',
     webUrl,
   ], {
     stdio: ['ignore', 'pipe', 'ignore'],
-    highWaterMark: 512 * 1024,
+    highWaterMark: 128 * 1024,                     // ← ridotto da 512 KB a 128 KB
   });
 
   const ffmpeg = spawn(FFMPEG_BIN, [
+    '-analyzeduration', '0',                       // ← non analizza l'intero file in RAM all'avvio
+    '-probesize', '32',                            // ← riduce ulteriormente la memoria di probe
     '-i', 'pipe:0',
     '-vn',
     '-c:a', 'libopus',
-    '-b:a', '128k',
+    '-b:a', '96k',                                 // ← ridotto da 128k: inudibile su Discord
     '-ar', '48000',
     '-ac', '2',
     '-f', 'ogg',
+    '-bufsize', '64k',                             // ← limite esplicito buffer output ffmpeg
     '-loglevel', 'error',
     'pipe:1',
   ], {
     stdio: ['pipe', 'pipe', 'ignore'],
-    highWaterMark: 512 * 1024,
+    highWaterMark: 64 * 1024,                      // ← ridotto da 512 KB a 64 KB
   });
 
   ytdlp.stdout.pipe(ffmpeg.stdin);
 
-  ytdlp.stdout.on('error', (err) => console.error(`[ytdlp stdout] ${title}:`, err.message));
-  ffmpeg.stdin.on('error', (err) => console.error(`[ffmpeg stdin] ${title}:`, err.message));
+  // EPIPE su ffmpeg.stdin è atteso ogni volta che ffmpeg termina prima di yt-dlp.
+  // Loggarla come errore era fuorviante: la si silenzia.
+  ffmpeg.stdin.on('error', (err) => {
+    if (err.code !== 'EPIPE') {
+      console.error(`[ffmpeg stdin] ${title}:`, err.message);
+    }
+  });
+
+  // ERR_STREAM_DESTROYED accade quando il pipe viene distrutto ordinatamente.
+  ytdlp.stdout.on('error', (err) => {
+    if (err.code !== 'EPIPE' && err.code !== 'ERR_STREAM_DESTROYED') {
+      console.error(`[ytdlp stdout] ${title}:`, err.message);
+    }
+  });
+
   ffmpeg.stdout.on('error', (err) => console.error(`[ffmpeg stdout] ${title}:`, err.message));
-  ytdlp.on('error', (err) => console.error(`[ytdlp] ${title}:`, err.message));
+  ytdlp.on('error',  (err) => console.error(`[ytdlp] ${title}:`, err.message));
   ffmpeg.on('error', (err) => console.error(`[ffmpeg] ${title}:`, err.message));
 
-  ytdlp.on('exit', (code, signal) =>
-    console.log(`✅ yt-dlp completato: "${title}" (code=${code}, signal=${signal})`));
-  ffmpeg.on('exit', (code, signal) =>
-    console.log(`✅ ffmpeg completato: "${title}" (code=${code}, signal=${signal})`));
+  ytdlp.on('exit', (code, signal) => {
+    const status = signal ? `signal=${signal}` : `code=${code}`;
+    console.log(`✅ yt-dlp completato: "${title}" (${status})`);
+  });
+
+  ffmpeg.on('exit', (code, signal) => {
+    const status = signal ? `signal=${signal}` : `code=${code}`;
+    console.log(`✅ ffmpeg completato: "${title}" (${status})`);
+
+    if (signal === 'SIGKILL') {
+      // Android OOM killer ha ucciso ffmpeg.
+      // Senza questo, yt-dlp continua a scrivere su una pipe chiusa
+      // e bufferizza in memoria finché non viene killato a sua volta.
+      console.warn(`[OOM] Android ha ucciso ffmpeg durante "${title}". Termino yt-dlp.`);
+      try { ytdlp.kill('SIGTERM'); } catch (_) {}
+    }
+  });
 
   return { stream: ffmpeg.stdout, processes: [ytdlp, ffmpeg] };
 }
