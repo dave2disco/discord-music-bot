@@ -1,28 +1,8 @@
 // ─── Supporto Spotify ─────────────────────────────────────────────────────────
-// Usa la Spotify Web API (gratuita, no Premium) solo per leggere i metadati
-// di una traccia (titolo + artista). L'audio viene poi cercato su YouTube
-// tramite la funzione search() esistente, senza modificare audio.js.
-//
-// Il token OAuth usa il flusso Client Credentials: non richiede login utente.
-// Viene cachato e rinnovato automaticamente alla scadenza (ogni 60 minuti).
-
 const https = require('https');
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
-
-function httpsGet(url, headers) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error('Risposta Spotify non valida')); }
-      });
-    }).on('error', reject);
-  });
-}
 
 function httpsGet(url, headers) {
   return new Promise((resolve, reject) => {
@@ -35,9 +15,26 @@ function httpsGet(url, headers) {
         catch (e) { reject(new Error('Risposta Spotify non valida')); }
       });
     }).on('error', (err) => {
-      console.error('[Spotify track error]', err.message, err.code); // ← aggiunto
+      console.error('[Spotify track error]', err.message, err.code);
       reject(err);
     });
+  });
+}
+
+function httpsPost(hostname, path, body, headers) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path, method: 'POST', headers }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        console.log('[Spotify token raw]', data);
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error('Risposta token Spotify non valida')); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
   });
 }
 
@@ -70,14 +67,12 @@ async function getToken() {
   }
 
   cachedToken = data.access_token;
-  // Scade 60 secondi prima della scadenza reale per sicurezza
   tokenExpiresAt = Date.now() + (data.expires_in - 60) * 1000;
 
   return cachedToken;
 }
 
 function extractTrackId(url) {
-  // Supporta sia https://open.spotify.com/track/ID che spotify:track:ID
   const match = url.match(/track[/:]([A-Za-z0-9]+)/);
   return match ? match[1] : null;
 }
@@ -103,7 +98,6 @@ async function getSpotifyTrackQuery(url) {
   const artist = data.artists[0].name;
   const title = data.name;
 
-  // Restituisce la query da passare a yt-dlp, es: "Daði Freyr Think About Things"
   return `${artist} - ${title}`;
 }
 
