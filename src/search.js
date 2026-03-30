@@ -32,7 +32,11 @@ async function search(query) {
     try {
       const cmd = `"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s" "${query}"`;
       // ↑ --no-cache-dir aggiunto
-      const { stdout } = await execAsync(cmd, { timeout: 30000 });
+      const { stdout } = await execAsync(cmd, {
+        timeout: 30000,
+        encoding: 'utf8',
+        env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+      });
       const title = stdout.trim().split('\n')[0] || query;
       songInfo = { title, webUrl: query, platform: 'Link diretto' };
     } catch {
@@ -51,7 +55,11 @@ async function search(query) {
         const escaped = (query + suffix).replace(/"/g, '\\"');
         const cmd = `"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(webpage_url)s" "${prefix}:${escaped}"`;
         // ↑ --no-cache-dir aggiunto
-        const { stdout } = await execAsync(cmd, { timeout: 30000 });
+        const { stdout } = await execAsync(cmd, {
+          timeout: 30000,
+          encoding: 'utf8',
+          env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+        });
         const lines = stdout.trim().split('\n').filter(Boolean);
         if (lines.length > 0) {
           const [title, webUrl] = lines[0].split('|||');
