@@ -24,20 +24,20 @@ function httpsGet(url, headers) {
   });
 }
 
-function httpsPost(hostname, path, body, headers) {
+function httpsGet(url, headers) {
   return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method: 'POST', headers }, (res) => {
+    https.get(url, { headers }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        console.log('[Spotify token raw]', data); // ← riga temporanea
+        console.log('[Spotify track raw]', data);
         try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error('Risposta token Spotify non valida')); }
+        catch (e) { reject(new Error('Risposta Spotify non valida')); }
       });
+    }).on('error', (err) => {
+      console.error('[Spotify track error]', err.message, err.code); // ← aggiunto
+      reject(err);
     });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
   });
 }
 
