@@ -40,7 +40,12 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
 
   const channel = message.channel;
 
-  player.on(AudioPlayerStatus.Idle, () => {
+  player.on(AudioPlayerStatus.Idle, (oldState) => {
+    // Guard: se lo stato precedente era già Idle (evento in cascata), ignora.
+    // Succede quando killCurrentProcesses() chiude lo stream E player.stop() sparano
+    // entrambi un Idle nello stesso ciclo dell'event loop.
+    if (oldState.status === AudioPlayerStatus.Idle) return;
+
     const q = queues.get(guildId);
     if (!q) return;
 
@@ -182,7 +187,7 @@ async function cmdPlay(message, args) {
 
         }
 
-        await new Promise(r => setTimeout(r, 800));
+        await new Promise(r => setTimeout(r, 2000));
       }
 
       const finalQueue = queues.get(guildId);
@@ -222,8 +227,12 @@ function cmdSkip(message) {
   const queue = queues.get(message.guild.id);
   if (!queue || !queue.playing) return message.reply('❌ Nessuna canzone in riproduzione.');
   queue.skipping = true;
-  queue.killCurrentProcesses();
-  queue.player.stop();
+  // NON chiamare killCurrentProcesses() qui: uccidere i processi prima di stop()
+  // chiude ffmpeg.stdout e genera un Idle event spurio *prima* di player.stop(),
+  // causando la cascata che salta 3-4 canzoni invece di una.
+  // L'Idle handler chiama già killCurrentProcesses() — lasciamo fare a lui.
+  // force=true garantisce la transizione immediata Playing→Idle senza passare per AutoPaused.
+  queue.player.stop(true);
   message.reply('⏭️ Canzone saltata!');
 }
 

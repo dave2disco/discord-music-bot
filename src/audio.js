@@ -21,7 +21,7 @@ function createAudioStream(webUrl, title, guildId) {
     webUrl,
   ], {
     stdio: ['ignore', 'pipe', 'ignore'],
-    highWaterMark: 128 * 1024,
+    highWaterMark: 512 * 1024,   // era 128 KB — più headroom per l'audio durante carichi CPU
   });
 
   const ffmpeg = spawn(FFMPEG_BIN, [
@@ -34,12 +34,12 @@ function createAudioStream(webUrl, title, guildId) {
     '-ar', '48000',
     '-ac', '2',
     '-f', 'ogg',
-    '-bufsize', '64k',
+    '-bufsize', '512k',          // era 64k — buffer più grande evita micro-interruzioni
     '-loglevel', 'error',
     'pipe:1',
   ], {
     stdio: ['pipe', 'pipe', 'ignore'],
-    highWaterMark: 64 * 1024,
+    highWaterMark: 256 * 1024,   // era 64 KB
   });
 
   ytdlp.stdout.pipe(ffmpeg.stdin);

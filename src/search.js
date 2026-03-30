@@ -5,6 +5,11 @@ const { isSpotifyUrl, getSpotifyTrackQuery } = require('./spotify');
 
 const execAsync = promisify(exec);
 
+// Su Linux/Termux abbassa la priorità CPU dei processi di ricerca
+// così ffmpeg (audio streaming) non viene privato di CPU durante il caricamento playlist.
+// Su Windows nice non esiste, quindi non viene usato.
+const NICE = process.platform === 'win32' ? '' : 'nice -n 10 ';
+
 const searchCache = new Map();
 const MAX_CACHE_SIZE = 50;
 
@@ -26,7 +31,7 @@ function isYouTubePlaylistUrl(str) {
 }
 
 async function fetchYouTubePlaylist(url) {
-  const cmd = `"${YTDLP_BIN}" --flat-playlist --no-cache-dir --ignore-errors --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${url}"`;
+  const cmd = `${NICE}"${YTDLP_BIN}" --flat-playlist --no-cache-dir --ignore-errors --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${url}"`;
   const { stdout } = await execAsync(cmd, { ...EXEC_OPTIONS, timeout: 120000 });
 
   const tracks = [];
@@ -55,7 +60,7 @@ async function search(query) {
 
   if (isUrl(query)) {
     try {
-      const cmd = `"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(duration)s" "${query}"`;
+      const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(duration)s" "${query}"`;
       const { stdout } = await execAsync(cmd, EXEC_OPTIONS);
       const [title, durationStr] = stdout.trim().split('\n')[0].split('|||');
       songInfo = {
@@ -78,7 +83,7 @@ async function search(query) {
     for (const { prefix, platform, suffix } of searches) {
       try {
         const escaped = (query + suffix).replace(/"/g, '\\"');
-        const cmd = `"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${prefix}:${escaped}"`;
+        const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${prefix}:${escaped}"`;
         const { stdout } = await execAsync(cmd, EXEC_OPTIONS);
         const lines = stdout.trim().split('\n').filter(Boolean);
         if (lines.length > 0) {
