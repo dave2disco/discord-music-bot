@@ -4,7 +4,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { PREFIX } = require('./src/config');
 const {
   cmdPlay, cmdSkip, cmdPause, cmdResume,
-  cmdStop, cmdQueue, cmdHelp,
+  cmdStop, cmdQueue, cmdHelp, cmdNowPlaying, cmdShuffle,
 } = require('./src/commands');
 
 // ─── Client Discord ───────────────────────────────────────────────────────────
@@ -33,6 +33,8 @@ client.on('messageCreate', async (message) => {
     case 'stop':        cmdStop(message);        break;
     case 'queue':       cmdQueue(message);       break;
     case 'help':        cmdHelp(message);        break;
+    case 'nowplaying':  cmdNowPlaying(message);  break;
+    case 'shuffle':     cmdShuffle(message);     break;
     default:
       message.reply('❌ Comando non riconosciuto. Usa `$help` per la lista comandi.');
   }
