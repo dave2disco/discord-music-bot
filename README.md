@@ -17,7 +17,6 @@ usando `yt-dlp` e `ffmpeg`.
 - **Node.js** 18+
 - **ffmpeg** con supporto `libopus`
 - **yt-dlp**
-- **Account Spotify Developer** (gratuito) per il supporto Spotify
 
 ## Installazione
 
