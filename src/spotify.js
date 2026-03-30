@@ -1,104 +1,53 @@
 // ─── Supporto Spotify ─────────────────────────────────────────────────────────
+// Usa l'endpoint oEmbed pubblico di Spotify (no API key, no Premium richiesto)
+// per estrarre il titolo della traccia, poi cerca su YouTube come al solito.
+
 const https = require('https');
 
-let cachedToken = null;
-let tokenExpiresAt = 0;
-
-function httpsGet(url, headers) {
+function httpsGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
     https.get(url, { headers }, (res) => {
+      // Gestisce redirect (301/302)
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        return resolve(httpsGet(res.headers.location, headers));
+      }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        console.log('[Spotify track raw]', data);
         try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error('Risposta Spotify non valida')); }
+        catch (e) { reject(new Error('Risposta oEmbed non valida')); }
       });
-    }).on('error', (err) => {
-      console.error('[Spotify track error]', err.message, err.code);
-      reject(err);
-    });
+    }).on('error', reject);
   });
-}
-
-function httpsPost(hostname, path, body, headers) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method: 'POST', headers }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        console.log('[Spotify token raw]', data);
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error('Risposta token Spotify non valida')); }
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-async function getToken() {
-  if (cachedToken && Date.now() < tokenExpiresAt) {
-    return cachedToken;
-  }
-
-  const { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET } = process.env;
-  if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
-    throw new Error('SPOTIFY_CLIENT_ID e SPOTIFY_CLIENT_SECRET mancanti nel .env');
-  }
-
-  const credentials = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64');
-  const body = 'grant_type=client_credentials';
-
-  const data = await httpsPost(
-    'accounts.spotify.com',
-    '/api/token',
-    body,
-    {
-      'Authorization': `Basic ${credentials}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Content-Length': Buffer.byteLength(body),
-    }
-  );
-
-  if (!data.access_token) {
-    throw new Error('Impossibile ottenere il token Spotify. Controlla Client ID e Secret.');
-  }
-
-  cachedToken = data.access_token;
-  tokenExpiresAt = Date.now() + (data.expires_in - 60) * 1000;
-
-  return cachedToken;
-}
-
-function extractTrackId(url) {
-  const match = url.match(/track[/:]([A-Za-z0-9]+)/);
-  return match ? match[1] : null;
 }
 
 function isSpotifyUrl(str) {
   return (str.includes('spotify.com') && str.includes('/track/')) || str.startsWith('spotify:track:');
 }
 
+function normalizeSpotifyUrl(str) {
+  // Converte spotify:track:ID in URL standard se necessario
+  if (str.startsWith('spotify:track:')) {
+    const id = str.split(':')[2];
+    return `https://open.spotify.com/track/${id}`;
+  }
+  // Rimuove query string (?si=...) e locale (intl-it) che possono dare problemi
+  const match = str.match(/track\/([A-Za-z0-9]+)/);
+  return match ? `https://open.spotify.com/track/${match[1]}` : str;
+}
+
 async function getSpotifyTrackQuery(url) {
-  const trackId = extractTrackId(url);
-  if (!trackId) throw new Error('Link Spotify non valido. Usa un link a una singola traccia.');
+  const cleanUrl = normalizeSpotifyUrl(url);
+  const oEmbedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
 
-  const token = await getToken();
-  const data = await httpsGet(
-    `https://api.spotify.com/v1/tracks/${trackId}`,
-    { 'Authorization': `Bearer ${token}` }
-  );
+  const data = await httpsGet(oEmbedUrl);
 
-  if (!data.name || !data.artists) {
+  // oEmbed restituisce { title: "Think About Things", provider_name: "Spotify", ... }
+  if (!data.title) {
     throw new Error('Impossibile leggere i metadati da Spotify.');
   }
 
-  const artist = data.artists[0].name;
-  const title = data.name;
-
-  return `${artist} - ${title}`;
+  return data.title;
 }
 
 module.exports = { isSpotifyUrl, getSpotifyTrackQuery };
