@@ -41,9 +41,7 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
   const channel = message.channel;
 
   player.on(AudioPlayerStatus.Idle, (oldState) => {
-    // Guard: se lo stato precedente era già Idle (evento in cascata), ignora.
-    // Succede quando killCurrentProcesses() chiude lo stream E player.stop() sparano
-    // entrambi un Idle nello stesso ciclo dell'event loop.
+
     if (oldState.status === AudioPlayerStatus.Idle) return;
 
     const q = queues.get(guildId);
@@ -60,10 +58,6 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
       }
     }
 
-    // ── Guard anti-loop: ferma se troppe canzoni falliscono in rapida successione ──
-    // Se una canzone dura meno di 2 secondi (e non è stata skippata intenzionalmente)
-    // è quasi certamente un fallimento silenzioso (connessione non pronta, yt-dlp error, ecc.).
-    // Dopo 3 fallimenti consecutivi fermiamo tutto per evitare lo spam di embed.
     if (!q.skipping && !q.oomKilled) {
       const playedMs = q.startedAt ? Date.now() - q.startedAt : 0;
       if (playedMs < 2000) {
@@ -85,7 +79,6 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
         q.consecutiveFailures = 0;
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     q.skipping  = false;
     q.oomKilled = false;
@@ -107,19 +100,33 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
     }
   });
 
-  connection.on(VoiceConnectionStatus.Disconnected, async () => {
-    try {
-      await Promise.race([
-        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-      ]);
-    } catch {
+  entersState(connection, VoiceConnectionStatus.Ready, 30_000)
+    .then(() => {
+      console.log(`✔  Connessione vocale pronta — guild ${guildId}`);
+
+      connection.on(VoiceConnectionStatus.Disconnected, async () => {
+        try {
+          await Promise.race([
+            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch {
+          const q = queues.get(guildId);
+          if (q) q.killCurrentProcesses();
+          connection.destroy();
+          queues.delete(guildId);
+        }
+      });
+    })
+    .catch(() => {
+
+      console.error(`✗  Connessione vocale mai raggiunta — guild ${guildId}`);
       const q = queues.get(guildId);
       if (q) q.killCurrentProcesses();
-      connection.destroy();
+      try { connection.destroy(); } catch (_) {}
       queues.delete(guildId);
-    }
-  });
+      channel.send('❌ Impossibile connettersi al canale vocale entro 30 secondi. Riprova.').catch(() => {});
+    });
 
   return queue;
 }
@@ -254,11 +261,7 @@ function cmdSkip(message) {
   const queue = queues.get(message.guild.id);
   if (!queue || !queue.playing) return message.reply('❌ Nessuna canzone in riproduzione.');
   queue.skipping = true;
-  // NON chiamare killCurrentProcesses() qui: uccidere i processi prima di stop()
-  // chiude ffmpeg.stdout e genera un Idle event spurio *prima* di player.stop(),
-  // causando la cascata che salta 3-4 canzoni invece di una.
-  // L'Idle handler chiama già killCurrentProcesses() — lasciamo fare a lui.
-  // force=true garantisce la transizione immediata Playing→Idle senza passare per AutoPaused.
+
   queue.player.stop(true);
   message.reply('⏭️ Canzone saltata!');
 }

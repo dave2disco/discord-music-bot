@@ -21,12 +21,13 @@ function createAudioStream(webUrl, title, guildId) {
     webUrl,
   ], {
     stdio: ['ignore', 'pipe', 'ignore'],
-    highWaterMark: 512 * 1024,   // era 128 KB — più headroom per l'audio durante carichi CPU
+    highWaterMark: 512 * 1024,
   });
 
   const ffmpeg = spawn(FFMPEG_BIN, [
     '-analyzeduration', '0',
-    '-probesize', '32',
+
+    '-probesize', '32K',
     '-i', 'pipe:0',
     '-vn',
     '-c:a', 'libopus',
@@ -34,12 +35,12 @@ function createAudioStream(webUrl, title, guildId) {
     '-ar', '48000',
     '-ac', '2',
     '-f', 'ogg',
-    '-bufsize', '512k',          // era 64k — buffer più grande evita micro-interruzioni
+    '-bufsize', '512k',
     '-loglevel', 'error',
     'pipe:1',
   ], {
     stdio: ['pipe', 'pipe', 'ignore'],
-    highWaterMark: 256 * 1024,   // era 64 KB
+    highWaterMark: 256 * 1024,
   });
 
   ytdlp.stdout.pipe(ffmpeg.stdin);
@@ -63,15 +64,12 @@ function createAudioStream(webUrl, title, guildId) {
 
   ffmpeg.on('exit', (code, signal) => {
     if (signal === 'SIGKILL') {
-
       const queue = queues.get(guildId);
       if (queue) queue.oomKilled = true;
       console.warn(`⚠  OOM killer su "${title}" — termino yt-dlp`);
       try { ytdlp.kill('SIGTERM'); } catch (_) {}
-
       try { ffmpeg.stdout.destroy(); } catch (_) {}
     }
-
   });
 
   return { stream: ffmpeg.stdout, processes: [ytdlp, ffmpeg] };
@@ -96,11 +94,6 @@ async function playNext(guildId, channel) {
 
   queue.cancelInactivityTimer();
 
-  // ── Attendi che la connessione WebRTC sia pronta ──────────────────────────
-  // joinVoiceChannel() è asincrono internamente: se playNext viene chiamato
-  // subito dopo (es. playlist caricata all'istante), la connessione non è
-  // ancora stabilita. Il player "suona" ma i pacchetti vengono scartati,
-  // lo stream si chiude in < 1s → Idle → canzone successiva → loop infinito.
   if (queue.connection.state.status !== VoiceConnectionStatus.Ready) {
     console.log(`⏳  Aspetto connessione vocale prima di riprodurre...`);
     try {
@@ -111,7 +104,6 @@ async function playNext(guildId, channel) {
       return;
     }
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   const song = queue.songs[0];
   queue.playing = true;
