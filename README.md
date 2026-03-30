@@ -54,14 +54,9 @@ cp .env.example .env
 Modifica `.env` con i tuoi valori:
 ```
 DISCORD_TOKEN=il_tuo_token_discord
-
-SPOTIFY_CLIENT_ID=il_tuo_client_id
-SPOTIFY_CLIENT_SECRET=il_tuo_client_secret
 ```
 
 Il token Discord si ottiene dal [Discord Developer Portal](https://discord.com/developers/applications).
-Le credenziali Spotify si ottengono dal [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-creando una nuova app (piano gratuito, no Premium richiesto).
 
 ## Avvio
 

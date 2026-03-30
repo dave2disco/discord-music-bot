@@ -10,6 +10,41 @@ function formatTime(seconds) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// ─── Silence buffer ──────────────────────────────────────────────────────────
+// Genera `durationMs` ms di silenzio OggOpus usando ffmpeg + anullsrc.
+// Scopo: svuotare il jitter buffer lato client di Discord tra una canzone e
+// l'altra. Il jitter buffer può contenere fino a ~500-1000 ms di audio residuo
+// della canzone precedente; riproducendo questo silenzio lo spingiamo fuori
+// prima che parta la canzone successiva, eliminando il "millisecondo di canzone
+// vecchia" che si sentiva all'inizio di ogni nuova traccia.
+function createSilenceResource(durationMs = 500) {
+  const proc = spawn(FFMPEG_BIN, [
+    '-f', 'lavfi',
+    '-i', `anullsrc=channel_layout=stereo:sample_rate=48000`,
+    '-t', String(durationMs / 1000),
+    '-c:a', 'libopus',
+    '-b:a', '96k',
+    '-ar', '48000',
+    '-ac', '2',
+    '-f', 'ogg',
+    '-loglevel', 'error',
+    'pipe:1',
+  ], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    highWaterMark: 16 * 1024,
+  });
+
+  proc.on('error', (err) => console.error('[silence ffmpeg]', err.message));
+  proc.stdout.on('error', (err) => {
+    if (err.code !== 'ERR_STREAM_DESTROYED') {
+      console.error('[silence stdout]', err.message);
+    }
+  });
+
+  const resource = createAudioResource(proc.stdout, { inputType: StreamType.OggOpus });
+  return { resource, process: proc };
+}
+
 function createAudioStream(webUrl, title, guildId) {
   const ytdlp = spawn(YTDLP_BIN, [
     '--no-playlist',
@@ -38,11 +73,6 @@ function createAudioStream(webUrl, title, guildId) {
     'pipe:1',
   ], {
     stdio: ['pipe', 'pipe', 'ignore'],
-    // FIX ISSUE-2: ridotto da 256KB a 64KB.
-    // A 96kbps, 256KB ≈ 21 secondi di audio pre-bufferizzati nel processo
-    // Node.js: troppo margine per dati residui durante la transizione tra
-    // canzoni. 64KB ≈ ~5 secondi: abbastanza per evitare stuttering, abbastanza
-    // poco per rendere il cambio canzone più pulito.
     highWaterMark: 64 * 1024,
   });
 
@@ -123,33 +153,19 @@ async function playNext(guildId, channel) {
     const resource = createAudioResource(stream, { inputType: StreamType.OggOpus });
     queue.player.play(resource);
 
-    // FIX ISSUE-1: l'embed "In riproduzione" è stato spostato nell'handler
-    // AudioPlayerStatus.Playing in commands.js. In questo modo il messaggio
-    // viene inviato solo quando l'audio sta effettivamente uscendo, non subito
-    // dopo player.play() (che può fallire silenziosamente in < 2 secondi).
-
   } catch (err) {
     console.error(`✗ Errore riproduzione "${song.title}": ${err.message}`);
     await channel.send(`❌ Errore durante la riproduzione: ${err.message}`).catch(() => {});
     queue.songs.shift();
     queue.playing = false;
-
-    // FIX BUG 3: senza questo controllo, se createAudioStream() o altre
-    // operazioni sincrone lanciano un'eccezione per ogni canzone (es. binario
-    // mancante), la ricorsione è infinita perché l'handler Idle non viene mai
-    // raggiunto e consecutiveFailures non viene mai incrementato.
     queue.consecutiveFailures++;
     if (queue.consecutiveFailures >= 3) {
       queue.consecutiveFailures = 0;
-      channel.send(
-        `❌ **${queue.consecutiveFailures + 3} errori consecutivi**. Possibile problema con i binari o la connessione.\n` +
-        `Riproduzione interrotta. Usa \`-play\` per riprovare.`
-      ).catch(() => {});
+      channel.send('❌ Troppi errori consecutivi. Riproduzione interrotta.').catch(() => {});
       return;
     }
-
     playNext(guildId, channel);
   }
 }
 
-module.exports = { createAudioStream, playNext, formatTime };
+module.exports = { createAudioStream, createSilenceResource, playNext, formatTime };

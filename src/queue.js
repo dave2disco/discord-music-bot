@@ -20,23 +20,18 @@ class ServerQueue {
     this.currentProcesses = [];
     this.consecutiveFailures = 0;
 
-    // FIX BUG 1: mancava questa proprietà → playlistLoaderId++ dava NaN e il
-    // controllo di cancellamento del loader Spotify falliva sempre.
     this.playlistLoaderId = 0;
 
-    // Riferimento al canale testo: usato dall'handler AudioPlayerStatus.Playing
-    // in commands.js per inviare l'embed "In riproduzione" solo quando l'audio
-    // è davvero partito.
     this.textChannel = null;
+
+    // true mentre il bot riproduce il silence buffer tra una canzone e l'altra.
+    // Usato dall'handler Idle in commands.js per distinguere la fine del
+    // silence buffer dalla fine di una vera canzone.
+    this.silencing = false;
   }
 
   killCurrentProcesses() {
     for (const proc of this.currentProcesses) {
-      // FIX BUG ISSUE-2: distruggi prima i stream, poi invia SIGTERM.
-      // Senza questa distruzione, ffmpeg può flushare il suo buffer interno
-      // nei ~ms di vita residua dopo SIGTERM, lasciando dati "stantii" nel
-      // buffer Node.js del suo stdout. Distruggendo il stream prima, quei
-      // dati vengono scartati invece di essere letti dal prossimo AudioResource.
       try { proc.stdout?.destroy(); } catch (_) {}
       try { proc.stdin?.destroy(); } catch (_) {}
       try { proc.kill('SIGTERM'); } catch (_) {}
