@@ -82,7 +82,7 @@ function extractTrackId(url) {
 }
 
 function isSpotifyUrl(str) {
-  return str.includes('spotify.com/track') || str.startsWith('spotify:track:');
+  return (str.includes('spotify.com') && str.includes('/track/')) || str.startsWith('spotify:track:');
 }
 
 async function getSpotifyTrackQuery(url) {
