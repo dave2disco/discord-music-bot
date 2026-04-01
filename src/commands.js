@@ -429,10 +429,23 @@ function cmdShuffle(message) {
   message.reply(`🔀 Coda mescolata! (${rest.length} tracce)`);
 }
 
+function cmdRemove(message, args) {
+  const queue = queues.get(message.guild.id);
+  if (!queue || queue.songs.length === 0) return message.reply('❌ La coda è vuota.');
+
+  const n = parseInt(args[0]);
+  if (isNaN(n) || n < 1 || n >= queue.songs.length) {
+    return message.reply(`❌ Numero non valido. Usa \`-queue\` per vedere i numeri delle canzoni in coda.`);
+  }
+
+  const removed = queue.songs.splice(n, 1)[0];
+  message.reply(`🗑️ Rimossa dalla coda: **${removed.title}**`);
+}
+
 function cmdHelp(message) {
   message.reply([
     '🎵 **Comandi disponibili:**',
-    '`-play [canzone o link]` — Riproduce o aggiunge alla coda',
+    '`-play [canzone o link]` (alias: `-p`) — Riproduce o aggiunge alla coda',
     ' Accetta: testo, link YouTube, link Spotify,',
     ' playlist YouTube, playlist Spotify',
     '`-skip` — Salta la canzone corrente',
@@ -440,6 +453,7 @@ function cmdHelp(message) {
     '`-resume` — Riprende la riproduzione',
     '`-stop` — Ferma tutto e svuota la coda',
     '`-queue` — Mostra la coda con le durate',
+    '`-remove <n>` — Rimuove la canzone numero N dalla coda',
     '`-nowplaying` — Canzone corrente con barra di avanzamento',
     '`-shuffle` — Mescola le canzoni in coda',
     '`-help` — Mostra questo messaggio',
@@ -456,4 +470,5 @@ module.exports = {
   cmdHelp,
   cmdNowPlaying,
   cmdShuffle,
+  cmdRemove,
 };
