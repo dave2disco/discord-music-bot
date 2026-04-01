@@ -56,11 +56,6 @@ function createAudioStream(webUrl, title, guildId) {
   const ytdlp = spawn(YTDLP_BIN, [
     '--no-playlist',
     '--no-cache-dir',
-    // ── FIX: player_client=ios bypassa il requisito del PO Token di YouTube ──
-    // YouTube dal 2024 blocca le richieste "bot-like" dopo pochi secondi di
-    // streaming. Passando come client iOS la richiesta viene accettata senza
-    // PO Token. Fallback su mweb se ios non fosse disponibile.
-    '--extractor-args', 'youtube:player_client=ios,mweb',
     '-f', 'bestaudio[abr<=96]/bestaudio[abr<=160]/bestaudio',
     '--no-warnings',
     '-o', '-',

@@ -64,7 +64,7 @@ function normalizeYouTubeUrl(url) {
 }
 
 async function fetchYouTubePlaylist(url) {
-  const cmd = `${NICE}"${YTDLP_BIN}" --flat-playlist --no-cache-dir --ignore-errors --extractor-args "youtube:player_client=ios,mweb" --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${url}"`;
+  const cmd = `${NICE}"${YTDLP_BIN}" --flat-playlist --no-cache-dir --ignore-errors --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${url}"`;
   const { stdout } = await execAsync(cmd, { ...EXEC_OPTIONS, timeout: 120000 });
 
   const tracks = [];
@@ -98,7 +98,7 @@ async function search(query) {
     // youtu.be → youtube.com/watch?v= ecc.
     const cleanUrl = normalizeYouTubeUrl(query);
     try {
-      const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --extractor-args "youtube:player_client=ios,mweb" --print "%(title)s|||%(duration)s" "${cleanUrl}"`;
+      const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(duration)s" "${cleanUrl}"`;
       const { stdout } = await execAsync(cmd, EXEC_OPTIONS);
       const [title, durationStr] = stdout.trim().split('\n')[0].split('|||');
       songInfo = {
@@ -121,7 +121,7 @@ async function search(query) {
     for (const { prefix, platform, suffix } of searches) {
       try {
         const escaped = (query + suffix).replace(/"/g, '\\"');
-        const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --extractor-args "youtube:player_client=ios,mweb" --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${prefix}:${escaped}"`;
+        const cmd = `${NICE}"${YTDLP_BIN}" --no-playlist --no-cache-dir --print "%(title)s|||%(webpage_url)s|||%(duration)s" "${prefix}:${escaped}"`;
         const { stdout } = await execAsync(cmd, EXEC_OPTIONS);
         const lines = stdout.trim().split('\n').filter(Boolean);
         if (lines.length > 0) {
