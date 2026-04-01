@@ -56,12 +56,17 @@ function createAudioStream(webUrl, title, guildId) {
   const ytdlp = spawn(YTDLP_BIN, [
     '--no-playlist',
     '--no-cache-dir',
+    // ── FIX: player_client=ios bypassa il requisito del PO Token di YouTube ──
+    // YouTube dal 2024 blocca le richieste "bot-like" dopo pochi secondi di
+    // streaming. Passando come client iOS la richiesta viene accettata senza
+    // PO Token. Fallback su mweb se ios non fosse disponibile.
+    '--extractor-args', 'youtube:player_client=ios,mweb',
     '-f', 'bestaudio[abr<=96]/bestaudio[abr<=160]/bestaudio',
     '--no-warnings',
     '-o', '-',
     cleanUrl,
   ], {
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],   // stderr catturato per debug
     highWaterMark: 512 * 1024,
   });
 
@@ -96,6 +101,15 @@ function createAudioStream(webUrl, title, guildId) {
   ffmpeg.stdout.on('error', (err) => {
     if (err.code !== 'ERR_STREAM_DESTROYED') {
       console.error(`[ffmpeg stdout] ${title}:`, err.message);
+    }
+  });
+
+  // Cattura stderr di yt-dlp per vedere i veri errori (rate limit, auth, ecc.)
+  let ytdlpStderr = '';
+  ytdlp.stderr.on('data', (chunk) => { ytdlpStderr += chunk.toString(); });
+  ytdlp.on('exit', (code) => {
+    if (code !== 0 && code !== null && ytdlpStderr.trim()) {
+      console.error(`[ytdlp exit ${code}] ${title}: ${ytdlpStderr.trim().split('\n').pop()}`);
     }
   });
 

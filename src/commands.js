@@ -89,7 +89,7 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
 
     if (!q.skipping && !q.oomKilled) {
       const playedMs = q.startedAt ? Date.now() - q.startedAt : 0;
-      if (playedMs < 2000) {
+      if (playedMs < 3000) {
         q.consecutiveFailures++;
         console.warn(`⚠ Fallimento rapido #${q.consecutiveFailures} per "${finished?.title}" (durata: ${playedMs}ms)`);
         if (q.consecutiveFailures >= 3) {
