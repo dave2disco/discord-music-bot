@@ -7,7 +7,6 @@ const {
   cmdStop, cmdQueue, cmdHelp, cmdNowPlaying, cmdShuffle, cmdRemove,
 } = require('./src/commands');
 
-// ─── Client Discord ──────────────────────────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -17,7 +16,6 @@ const client = new Client({
   ],
 });
 
-// ─── Gestione messaggi ───────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.content.startsWith(PREFIX)) return;
@@ -42,9 +40,9 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// ─── Avvio ───────────────────────────────────────────────────────────────────
 client.once('clientReady', () => {
   console.log(`✅ Bot online come ${client.user.tag}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
+

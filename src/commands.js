@@ -9,7 +9,7 @@ const { EmbedBuilder } = require('discord.js');
 const { queues, ServerQueue } = require('./queue');
 const { search, isYouTubePlaylistUrl, fetchYouTubePlaylist } = require('./search');
 const { isSpotifyPlaylistUrl, fetchSpotifyPlaylistTracks } = require('./spotify');
-const { playNext, formatTime, createSilenceResource } = require('./audio');
+const { playNext, formatTime, createSilenceResource, createAudioStream } = require('./audio');
 
 function buildSong(info, requestedBy) {
   return {
@@ -41,10 +41,6 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
   const channel = message.channel;
   queue.textChannel = channel;
 
-  // ─── "In riproduzione" solo quando l'audio parte davvero ─────────────────
-  // Buffering→Playing = nuova canzone vera.
-  // Paused→Playing = resume (già gestito da cmdResume).
-  // Il silence buffer non deve generare embed (q.silencing è true in quel momento).
   player.on(AudioPlayerStatus.Playing, (oldState) => {
     if (oldState.status !== AudioPlayerStatus.Buffering) return;
 
@@ -61,14 +57,12 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
     channel.send({ embeds: [embed] }).catch(() => {});
   });
 
-  // ─── Handler Idle ─────────────────────────────────────────────────────────
   player.on(AudioPlayerStatus.Idle, (oldState) => {
     if (oldState.status === AudioPlayerStatus.Idle) return;
 
     const q = queues.get(guildId);
     if (!q) return;
 
-    // ── SILENCE BUFFER TERMINATO → avvia la canzone successiva ──────────────
     if (q.silencing) {
       q.silencing = false;
       q.killCurrentProcesses();
@@ -77,7 +71,6 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
       return;
     }
 
-    // ── FINE CANZONE / SKIP ───────────────────────────────────────────────────
     const finished = q.songs[0];
     if (finished) {
       if (q.skipping)       console.log(`⏭ "${finished.title}" — skippata`);
@@ -99,6 +92,7 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
             `Usa \`-play\` per riprovare o \`-skip\` per saltare.`
           ).catch(() => {});
           q.killCurrentProcesses();
+          q.killPrefetch();
           q.songs = [];
           q.playing = false;
           q.consecutiveFailures = 0;
@@ -118,45 +112,45 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
     q.killCurrentProcesses();
     q.songs.shift();
 
-    // ── SILENCE BUFFER ───────────────────────────────────────────────────────
-    // Inserito tra ogni canzone e la successiva, incluso dopo uno skip.
-    // Scopo: svuotare il jitter buffer lato client Discord (~500ms) per
-    // evitare che i frame audio residui della canzone precedente vengano
-    // riprodotti all'inizio di quella successiva.
-    //
-    // Non viene inserito solo nei casi in cui non c'è una canzone successiva
-    // o quando l'OOM killer ha terminato il processo (in quel caso vogliamo
-    // riprendere immediatamente la stessa canzone dall'inizio).
     if (q.songs.length > 0 && !wasOomKilled && q.consecutiveFailures === 0) {
-      const { resource: silenceResource, process: silenceProc } = createSilenceResource(500);
+      const { resource: silenceResource, process: silenceProc } = createSilenceResource(300);
       q.silencing = true;
       q.currentProcesses = [silenceProc];
       q.player.play(silenceResource);
-      // q.playing rimane true durante il silence buffer
+
+      if (q.songs[0] && !q.prefetchedStream) {
+        try {
+          const nextSong = q.songs[0];
+          q.prefetchedStream = createAudioStream(nextSong.webUrl, nextSong.title, guildId);
+          console.log(`🔄 Prefetch avviato per "${nextSong.title}"`);
+        } catch (err) {
+          console.warn(`[prefetch] Errore avvio: ${err.message}`);
+          q.prefetchedStream = null;
+        }
+      }
+
       return;
     }
 
-    // ── TRANSIZIONE DIRETTA (OOM, fallimenti, coda vuota) ────────────────────
     q.playing = false;
     playNext(guildId, channel);
   });
 
-  // ─── Handler errori player ────────────────────────────────────────────────
   player.on('error', async (error) => {
-    // "Premature close" è sempre generato da killCurrentProcesses() —
-    // è intenzionale e non va mai mostrato all'utente.
+
     if (error.message === 'Premature close') {
       console.warn(`[player] Premature close (atteso — killCurrentProcesses)`);
       return;
     }
 
     const q = queues.get(guildId);
-    // Queue rimossa (es. dopo -stop): errore post-mortem, ignora completamente.
+
     if (!q) return;
 
     console.error(`✗ Errore player: ${error.message}`);
     await channel.send(`❌ Errore audio: ${error.message}`);
     q.killCurrentProcesses();
+    q.killPrefetch();
     q.songs.shift();
     q.playing = false;
     playNext(guildId, channel);
@@ -174,7 +168,10 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
           ]);
         } catch {
           const q = queues.get(guildId);
-          if (q) q.killCurrentProcesses();
+          if (q) {
+            q.killCurrentProcesses();
+            q.killPrefetch();
+          }
           connection.destroy();
           queues.delete(guildId);
         }
@@ -183,7 +180,10 @@ function getOrCreateQueue(guildId, voiceChannel, message) {
     .catch(() => {
       console.error(`✗ Connessione vocale mai raggiunta — guild ${guildId}`);
       const q = queues.get(guildId);
-      if (q) q.killCurrentProcesses();
+      if (q) {
+        q.killCurrentProcesses();
+        q.killPrefetch();
+      }
       try { connection.destroy(); } catch (_) {}
       queues.delete(guildId);
       channel.send('❌ Impossibile connettersi al canale vocale entro 30 secondi. Riprova.').catch(() => {});
@@ -269,19 +269,12 @@ async function cmdPlay(message, args) {
             requestedBy: username,
           });
 
-          // Avvia la riproduzione se il bot non sta riproducendo nulla.
-          // Controlliamo q.playing al momento dell'inserimento invece di
-          // affidarci a wasEmpty/firstLoaded catturati all'inizio: in questo
-          // modo gestiamo correttamente il caso in cui l'utente skippa durante
-          // il caricamento e la coda si svuota prima che arrivino altre tracce.
-          // playNext ha già un guard interno (if queue.playing return) quindi
-          // chiamarlo più volte è sicuro.
           if (!q.playing) {
             playNext(guildId, message.channel);
           }
         } catch (_) {}
 
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 800));
       }
 
       const finalQueue = queues.get(guildId);
@@ -321,17 +314,19 @@ function cmdSkip(message) {
   const queue = queues.get(message.guild.id);
   if (!queue || !queue.playing) return message.reply('❌ Nessuna canzone in riproduzione.');
 
-  // Se è in corso il silence buffer, lo fermiamo e andiamo direttamente
-  // alla canzone successiva senza un altro silence (non c'è audio residuo).
   if (queue.silencing) {
-    queue.silencing = false;
-    queue.killCurrentProcesses();
+    queue.killCurrentProcesses();   
+
+    queue.killPrefetch();            
+
     queue.player.stop(true);
     message.reply('⏭️ Canzone saltata!');
     return;
   }
 
   queue.skipping = true;
+  queue.killPrefetch();  
+
   queue.player.stop(true);
   message.reply('⏭️ Canzone saltata!');
 }
@@ -361,6 +356,7 @@ function cmdStop(message) {
   queue.skipping = true;
   queue.cancelInactivityTimer();
   queue.killCurrentProcesses();
+  queue.killPrefetch();
   queue.songs = [];
   queue.player.stop();
   queue.connection.destroy();
@@ -422,6 +418,8 @@ function cmdShuffle(message) {
     return message.reply('❌ Non ci sono canzoni in coda da mescolare.');
   }
 
+  queue.killPrefetch();
+
   const current = queue.songs[0];
   const rest = queue.songs.slice(1);
   for (let i = rest.length - 1; i > 0; i--) {
@@ -440,6 +438,8 @@ function cmdRemove(message, args) {
   if (isNaN(n) || n < 1 || n >= queue.songs.length) {
     return message.reply(`❌ Numero non valido. Usa \`-queue\` per vedere i numeri delle canzoni in coda.`);
   }
+
+  if (n === 1) queue.killPrefetch();
 
   const removed = queue.songs.splice(n, 1)[0];
   message.reply(`🗑️ Rimossa dalla coda: **${removed.title}**`);
@@ -475,3 +475,4 @@ module.exports = {
   cmdShuffle,
   cmdRemove,
 };
+

@@ -4,6 +4,8 @@ const { YTDLP_BIN, FFMPEG_BIN } = require('./config');
 const { queues } = require('./queue');
 const { normalizeYouTubeUrl } = require('./search');
 
+const IS_WIN = process.platform === 'win32';
+
 function formatTime(seconds) {
   if (!seconds || seconds <= 0) return '?:??';
   const m = Math.floor(seconds / 60);
@@ -11,16 +13,15 @@ function formatTime(seconds) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// ─── Silence buffer ──────────────────────────────────────────────────────────
-// Genera `durationMs` ms di silenzio OggOpus usando ffmpeg + anullsrc.
-// Scopo: svuotare il jitter buffer lato client di Discord tra una canzone e
-// l'altra (e dopo uno skip). Il jitter buffer può contenere fino a ~500-1000ms
-// di audio residuo; riproducendo questo silenzio lo spingiamo fuori prima che
-// parta la canzone successiva.
-function createSilenceResource(durationMs = 500) {
-  const proc = spawn(FFMPEG_BIN, [
+function spawnNice(bin, args, opts) {
+  if (IS_WIN) return spawn(bin, args, opts);
+  return spawn('nice', ['-n', '10', bin, ...args], opts);
+}
+
+function createSilenceResource(durationMs = 300) {
+  const proc = spawnNice(FFMPEG_BIN, [
     '-f', 'lavfi',
-    '-i', `anullsrc=channel_layout=stereo:sample_rate=48000`,
+    '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
     '-t', String(durationMs / 1000),
     '-c:a', 'libopus',
     '-b:a', '96k',
@@ -46,26 +47,28 @@ function createSilenceResource(durationMs = 500) {
 }
 
 function createAudioStream(webUrl, title, guildId) {
-  // Normalizziamo l'URL anche qui, come secondo livello di difesa.
-  // I webUrl che arrivano dalla playlist sono già stati normalizzati in
-  // fetchYouTubePlaylist, ma quelli che arrivano da -play diretto o da
-  // ricerche testualI passano già per search() che normalizza. Questo
-  // garantisce comunque che nessun ?si= o youtu.be raggiunga yt-dlp.
+
   const cleanUrl = normalizeYouTubeUrl(webUrl);
 
-  const ytdlp = spawn(YTDLP_BIN, [
+  const ytdlp = spawnNice(YTDLP_BIN, [
     '--no-playlist',
     '--no-cache-dir',
     '-f', 'bestaudio[abr<=96]/bestaudio[abr<=160]/bestaudio',
     '--no-warnings',
+
+    '--extractor-args', 'youtube:skip=dash,translated_subs',
+
+    '--socket-timeout', '15',
+
+    '--retries', '3',
     '-o', '-',
     cleanUrl,
   ], {
-    stdio: ['ignore', 'pipe', 'pipe'],   // stderr catturato per debug
+    stdio: ['ignore', 'pipe', 'pipe'],
     highWaterMark: 512 * 1024,
   });
 
-  const ffmpeg = spawn(FFMPEG_BIN, [
+  const ffmpeg = spawnNice(FFMPEG_BIN, [
     '-analyzeduration', '0',
     '-probesize', '32K',
     '-i', 'pipe:0',
@@ -99,7 +102,6 @@ function createAudioStream(webUrl, title, guildId) {
     }
   });
 
-  // Cattura stderr di yt-dlp per vedere i veri errori (rate limit, auth, ecc.)
   let ytdlpStderr = '';
   ytdlp.stderr.on('data', (chunk) => { ytdlpStderr += chunk.toString(); });
   ytdlp.on('exit', (code) => {
@@ -158,8 +160,19 @@ async function playNext(guildId, channel) {
   queue.playing = true;
 
   try {
-    queue.killCurrentProcesses();
-    const { stream, processes } = createAudioStream(song.webUrl, song.title, guildId);
+    let stream, processes;
+
+    if (queue.prefetchedStream) {
+
+      console.log(`⚡ Stream prefetchato pronto per "${song.title}"`);
+      ({ stream, processes } = queue.prefetchedStream);
+      queue.prefetchedStream = null;
+    } else {
+
+      queue.killCurrentProcesses();
+      ({ stream, processes } = createAudioStream(song.webUrl, song.title, guildId));
+    }
+
     queue.currentProcesses = processes;
     queue.startedAt = Date.now();
 
@@ -171,6 +184,7 @@ async function playNext(guildId, channel) {
 
   } catch (err) {
     console.error(`✗ Errore riproduzione "${song.title}": ${err.message}`);
+    queue.prefetchedStream = null;
     await channel.send(`❌ Errore durante la riproduzione: ${err.message}`).catch(() => {});
     queue.songs.shift();
     queue.playing = false;
@@ -185,3 +199,4 @@ async function playNext(guildId, channel) {
 }
 
 module.exports = { createAudioStream, createSilenceResource, playNext, formatTime };
+

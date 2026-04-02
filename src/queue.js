@@ -24,10 +24,9 @@ class ServerQueue {
 
     this.textChannel = null;
 
-    // true mentre il bot riproduce il silence buffer tra una canzone e l'altra.
-    // Usato dall'handler Idle in commands.js per distinguere la fine del
-    // silence buffer dalla fine di una vera canzone.
     this.silencing = false;
+
+    this.prefetchedStream = null;
   }
 
   killCurrentProcesses() {
@@ -37,6 +36,17 @@ class ServerQueue {
       try { proc.kill('SIGTERM'); } catch (_) {}
     }
     this.currentProcesses = [];
+  }
+
+  killPrefetch() {
+    if (!this.prefetchedStream) return;
+    const { processes } = this.prefetchedStream;
+    for (const proc of processes || []) {
+      try { proc.stdout?.destroy(); } catch (_) {}
+      try { proc.stdin?.destroy(); } catch (_) {}
+      try { proc.kill('SIGTERM'); } catch (_) {}
+    }
+    this.prefetchedStream = null;
   }
 
   startInactivityTimer(callback) {
@@ -53,3 +63,4 @@ class ServerQueue {
 }
 
 module.exports = { queues, ServerQueue };
+
