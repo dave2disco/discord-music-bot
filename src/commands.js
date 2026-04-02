@@ -239,7 +239,6 @@ async function cmdPlay(message, args) {
     if (!tracks.length) return loading.edit('❌ Playlist Spotify vuota o non accessibile.');
 
     const queue = getOrCreateQueue(guildId, voiceChannel, message);
-    const wasEmpty = queue.songs.length === 0 && !queue.playing;
 
     queue.playlistLoaderId++;
     const loaderId = queue.playlistLoaderId;
@@ -248,8 +247,6 @@ async function cmdPlay(message, args) {
       `🔍 Trovate **${tracks.length}** tracce — cerco su YouTube in background...`
     );
     console.log(`📋 Playlist Spotify: ${tracks.length} tracce da cercare su YouTube`);
-
-    let firstLoaded = false;
 
     ;(async () => {
       for (let i = 0; i < tracks.length; i++) {
@@ -272,9 +269,15 @@ async function cmdPlay(message, args) {
             requestedBy: username,
           });
 
-          if (!firstLoaded) {
-            firstLoaded = true;
-            if (wasEmpty) playNext(guildId, message.channel);
+          // Avvia la riproduzione se il bot non sta riproducendo nulla.
+          // Controlliamo q.playing al momento dell'inserimento invece di
+          // affidarci a wasEmpty/firstLoaded catturati all'inizio: in questo
+          // modo gestiamo correttamente il caso in cui l'utente skippa durante
+          // il caricamento e la coda si svuota prima che arrivino altre tracce.
+          // playNext ha già un guard interno (if queue.playing return) quindi
+          // chiamarlo più volte è sicuro.
+          if (!q.playing) {
+            playNext(guildId, message.channel);
           }
         } catch (_) {}
 
