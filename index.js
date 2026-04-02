@@ -4,7 +4,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { PREFIX } = require('./src/config');
 const {
   cmdPlay, cmdSkip, cmdPause, cmdResume,
-  cmdStop, cmdQueue, cmdHelp, cmdNowPlaying, cmdShuffle,
+  cmdStop, cmdQueue, cmdHelp, cmdNowPlaying, cmdShuffle, cmdRemove,
 } = require('./src/commands');
 
 // ─── Client Discord ──────────────────────────────────────────────────────────
@@ -26,7 +26,8 @@ client.on('messageCreate', async (message) => {
   const command = args.shift().toLowerCase();
 
   switch (command) {
-    case 'play':       await cmdPlay(message, args); break;
+    case 'play':
+    case 'p':          await cmdPlay(message, args); break;
     case 'skip':       cmdSkip(message);             break;
     case 'pause':      cmdPause(message);            break;
     case 'resume':     cmdResume(message);           break;
@@ -35,8 +36,8 @@ client.on('messageCreate', async (message) => {
     case 'help':       cmdHelp(message);             break;
     case 'nowplaying': cmdNowPlaying(message);       break;
     case 'shuffle':    cmdShuffle(message);          break;
+    case 'remove':     cmdRemove(message, args);     break;
     default:
-      // FIX BUG 2: era hardcoded '$help' indipendentemente dal PREFIX configurato
       message.reply(`❌ Comando non riconosciuto. Usa \`${PREFIX}help\` per la lista comandi.`);
   }
 });
